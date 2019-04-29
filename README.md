@@ -51,6 +51,19 @@ Below we show the result for 'monarch' in SET14 with artififcial Gaussian  noise
 <!-- ![Schematic](images/monarch_example.png) -->
 ![Schematic](images/monarch_compare.png)
 
+#### Comparison of different filters for BSD300 and SET14 (PSNR/SSIM)
+
+|Dataset| Mean|TV|NLM|BM3D|CNN|
+|:---| :---:|:---:|:---:|:---:|:---:|
+|Gaussian , sigma = 30||||||
+|BSD300|24.80 / 0.75|29.19 / 0.90|28.76 / 0.88|29.50 / 0.91|30.70 / 0.93  |
+|Set14|24.87 / 0.77|29.16 / 0.91|29.15 / 0.90|29.33 / 0.92|30.70 / 0.94   |
+|Poisson noise, lambda = 10||||||
+|BSD300|24.33 / 0.74|28.60 / 0.89|27.83 / 0.85|29.11 / 0.90|30.65 / 0.93  |
+|Set14|23.36 / 0.72|27.73 / 0.89|27.38 / 0.86|28.22 / 0.90|30.17 / 0.93   |
+            
+The [TV denoising](https://doi.org/10.1023/B:JMIV.0000011325.36760.1e) and [Non-Local Means](https://doi.org/10.5201/ipol.2014.120) were done using the implementations in [scikit-ikmage](https://scikit-image.org/). NLM was done with patch size 5 and patch distance of 6. The [BM3D](https://doi.org/10.1109/TIP.2007.901238) was done using the implementation in [pybm3d](\url{https://pypi.org/project/pybm3d/) with default parameters. For the reference methods, free parameters were optimized by minimizing the L2 norm using oracle information.
+
 ### Tomography
 
 Example of a SXT reconstruction of a Human B-cell reconstructed with FBP (Ram-Lak). In this example, the net was trained simultaneously on all projection images.
@@ -62,6 +75,9 @@ Example of a SXT reconstruction of a Human B-cell reconstructed with FBP (Ram-La
 
 #### Credit where credit is due
 
+Supported by:
+
+[![CZI](images/czi-logo.jpg)](https://www.czbiohub.org/)
 
 
 Encoder-decoder neural network implementation adapted from the UNet implementation of [jaxony](https://github.com/jaxony/unet-pytorch).
