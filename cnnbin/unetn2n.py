@@ -1,9 +1,11 @@
 import numpy as np
 import torch
+
 # import torch.nn as nn
 import torch.nn.functional as F
 from torch.autograd import Variable
 from torch.nn import init
+from torch import nn
 
 if __name__ == "__main__":
     from torchsummary import summary
@@ -15,15 +17,11 @@ else:
 
 def conv1x1(in_channels, out_channels, groups=1):
     return torch.nn.Conv2d(
-        in_channels, out_channels, kernel_size=1, groups=groups, stride=1)
+        in_channels, out_channels, kernel_size=1, groups=groups, stride=1
+    )
 
 
-def conv3x3(in_channels,
-            out_channels,
-            stride=1,
-            padding=1,
-            bias=True,
-            groups=1):
+def conv3x3(in_channels, out_channels, stride=1, padding=1, bias=True, groups=1):
     return torch.nn.Conv2d(
         in_channels,
         out_channels,
@@ -31,19 +29,22 @@ def conv3x3(in_channels,
         stride=stride,
         padding=padding,
         bias=bias,
-        groups=groups)
+        groups=groups,
+    )
 
 
-def upconv2x2(in_channels, out_channels, mode='transpose'):
-    if mode == 'transpose':
+def upconv2x2(in_channels, out_channels, mode="transpose"):
+    if mode == "transpose":
         return torch.nn.ConvTranspose2d(
-            in_channels, out_channels, kernel_size=2, stride=2)
+            in_channels, out_channels, kernel_size=2, stride=2
+        )
     else:
         # out_channels is always going to be the same
         # as in_channels
         return torch.nn.Sequential(
-            torch.nn.Upsample(mode='bilinear', scale_factor=2),
-            conv1x1(in_channels, out_channels))
+            torch.nn.Upsample(mode="bilinear", scale_factor=2),
+            conv1x1(in_channels, out_channels),
+        )
 
 
 class DownConv(torch.nn.Module):
@@ -52,21 +53,26 @@ class DownConv(torch.nn.Module):
     A ReLU activation follows each convolution.
     """
 
-    def __init__(self, in_channels, out_channels, pooling=True):
+    def __init__(self, in_channels, out_channels, instancenorm=False, pooling=True):
         super(DownConv, self).__init__()
 
         self.in_channels = in_channels
         self.out_channels = out_channels
+
+        self.instance_norm = None
         self.pooling = pooling
 
         self.conv1 = conv3x3(self.in_channels, self.out_channels)
-
+        if instancenorm:
+            self.instance_norm = nn.InstanceNorm2d(self.out_channels)
         if self.pooling:
             self.pool = torch.nn.MaxPool2d(kernel_size=2, stride=2)
 
     def forward(self, x):
-
-        x = F.relu(self.conv1(x))
+        x = self.conv1(x)
+        if self.instance_norm is not None:
+            x = self.instance_norm(x)
+        x = F.relu(x)
         # x = self.batch_norm(x)
         # x = self.dropout(x)
         before_pool = x
@@ -81,12 +87,15 @@ class UpConv(torch.nn.Module):
     A ReLU activation follows each convolution.
     """
 
-    def __init__(self,
-                 in_channels,
-                 in_skip,
-                 out_channels,
-                 merge_mode='concat',
-                 up_mode='transpose'):
+    def __init__(
+        self,
+        in_channels,
+        in_skip,
+        out_channels,
+        instancenorm=False,
+        merge_mode="concat",
+        up_mode="transpose",
+    ):
         super(UpConv, self).__init__()
 
         self.in_channels = in_channels
@@ -94,17 +103,19 @@ class UpConv(torch.nn.Module):
         self.out_channels = out_channels
         self.merge_mode = merge_mode
         self.up_mode = up_mode
+        self.instance_norm = None
 
-        self.upconv = upconv2x2(
-            self.in_channels, self.in_channels, mode=self.up_mode)
+        self.upconv = upconv2x2(self.in_channels, self.in_channels, mode=self.up_mode)
 
-        if self.merge_mode == 'concat':
-            self.conv1 = conv3x3(self.in_channels + self.in_skip,
-                                 self.out_channels)
+        if self.merge_mode == "concat":
+            self.conv1 = conv3x3(self.in_channels + self.in_skip, self.out_channels)
         else:
             # num of input channels to conv2 is same
             self.conv1 = conv3x3(self.out_channels, self.out_channels)
         self.conv2 = conv3x3(self.out_channels, self.out_channels)
+
+        if instancenorm:
+            self.instance_norm = nn.InstanceNorm2d(self.out_channels)
 
     def forward(self, from_down, from_up):
         """ Forward pass
@@ -114,7 +125,7 @@ class UpConv(torch.nn.Module):
         """
 
         from_up = self.upconv(from_up)
-        if self.merge_mode == 'concat':
+        if self.merge_mode == "concat":
             x = torch.cat((from_up, from_down), 1)
         else:
             x = from_up + from_down
@@ -123,9 +134,19 @@ class UpConv(torch.nn.Module):
         #     print(
         #         f'   Concat expecting {self.in_channels + self.in_skip} -> {x.shape[1]}'
         #     )
-        x = F.relu(self.conv1(x))
-        x = F.relu(self.conv2(x))
-        # x = self.batch_norm(x)
+        x = self.conv1(x)
+        if self.instance_norm is not None:
+            x = self.instance_norm(x)
+        x = F.relu(x)
+
+        x = self.conv2(x)
+        if self.instance_norm is not None:
+            x = self.instance_norm(x)
+        x = F.relu(x)
+
+        # x = F.relu(self.conv1(x))
+        # x = F.relu(self.conv2(x))
+        # # x = self.batch_norm(x)
         return x
 
 
@@ -149,13 +170,16 @@ class UNet(torch.nn.Module):
         the tranpose convolution (specified by upmode='transpose')
     """
 
-    def __init__(self,
-                 in_channels=1,
-                 depth=4,
-                 start_filts=48,
-                 up_mode='transpose',
-                 merge_mode='concat',
-                 input_skip=True):
+    def __init__(
+        self,
+        in_channels=1,
+        depth=4,
+        start_filts=48,
+        instancenorm=False,
+        up_mode="transpose",
+        merge_mode="concat",
+        input_skip=True,
+    ):
         """
         Arguments:
             in_channels: int, number of channels in the input tensor.
@@ -169,33 +193,40 @@ class UNet(torch.nn.Module):
         """
         super(UNet, self).__init__()
 
-        if up_mode in ('transpose', 'upsample'):
+        if up_mode in ("transpose", "upsample"):
             self.up_mode = up_mode
         else:
-            raise ValueError("\"{}\" is not a valid mode for "
-                             "upsampling. Only \"transpose\" and "
-                             "\"upsample\" are allowed.".format(up_mode))
+            raise ValueError(
+                '"{}" is not a valid mode for '
+                'upsampling. Only "transpose" and '
+                '"upsample" are allowed.'.format(up_mode)
+            )
 
-        if merge_mode in ('concat', 'add'):
+        if merge_mode in ("concat", "add"):
             self.merge_mode = merge_mode
         else:
-            raise ValueError("\"{}\" is not a valid mode for"
-                             "merging up and down paths. "
-                             "Only \"concat\" and "
-                             "\"add\" are allowed.".format(up_mode))
+            raise ValueError(
+                '"{}" is not a valid mode for'
+                "merging up and down paths. "
+                'Only "concat" and '
+                '"add" are allowed.'.format(up_mode)
+            )
 
         # NOTE: up_mode 'upsample' is incompatible with merge_mode 'add'
-        if self.up_mode == 'upsample' and self.merge_mode == 'add':
-            raise ValueError("up_mode \"upsample\" is incompatible "
-                             "with merge_mode \"add\" at the moment "
-                             "because it doesn't make sense to use "
-                             "nearest neighbour to reduce "
-                             "depth channels (by half).")
+        if self.up_mode == "upsample" and self.merge_mode == "add":
+            raise ValueError(
+                'up_mode "upsample" is incompatible '
+                'with merge_mode "add" at the moment '
+                "because it doesn't make sense to use "
+                "nearest neighbour to reduce "
+                "depth channels (by half)."
+            )
 
         self.in_channels = in_channels
         self.start_filts = start_filts
         self.depth = depth
         self.input_skip = input_skip
+        self.instancenorm = instancenorm
 
         self.down_convs = []
         self.up_convs = []
@@ -206,7 +237,9 @@ class UNet(torch.nn.Module):
             outs = self.start_filts
             pooling = True if i < depth - 1 else False
 
-            down_conv = DownConv(ins, outs, pooling=pooling)
+            down_conv = DownConv(
+                ins, outs, instancenorm=self.instancenorm, pooling=pooling
+            )
             # print(f'Adding encode  {ins} -> {outs}')
             self.down_convs.append(down_conv)
 
@@ -217,13 +250,23 @@ class UNet(torch.nn.Module):
             outs = 2 * self.start_filts
             skip = self.start_filts
             up_conv = UpConv(
-                ins, skip, outs, up_mode=up_mode, merge_mode=merge_mode)
+                ins,
+                skip,
+                outs,
+                up_mode=up_mode,
+                merge_mode=merge_mode,
+                instancenorm=self.instancenorm,
+            )
             self.up_convs.append(up_conv)
             # print(f'Adding decode  {ins}+{self.start_filts} -> {outs}')
 
         self.fupconv = upconv2x2(2 * self.start_filts, 2 * self.start_filts)
 
-        ins = self.in_channels + 2 * self.start_filts if self.input_skip else 2 * self.start_filts
+        ins = (
+            self.in_channels + 2 * self.start_filts
+            if self.input_skip
+            else 2 * self.start_filts
+        )
         self.fconv1 = conv3x3(ins, 64)
         self.fconv2 = conv3x3(64, 32)
         self.fconv3 = conv3x3(32, in_channels)
@@ -281,7 +324,7 @@ class UNet(torch.nn.Module):
         return x
 
     def summary(self, shape):
-        return summary(self, shape, device='cpu')
+        return summary(self, shape, device="cpu")
 
 
 DEBUG = False
@@ -293,11 +336,8 @@ if __name__ == "__main__":
     """
 
     model = UNet(
-        in_channels=3,
-        depth=5,
-        start_filts=48,
-        merge_mode='concat',
-        input_skip=False)
+        in_channels=3, depth=5, start_filts=48, merge_mode="concat", input_skip=False
+    )
     if DEBUG:
         x = Variable(torch.FloatTensor(np.random.random((1, 3, 64, 64))))
         out = model(x)

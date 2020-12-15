@@ -4,7 +4,7 @@ Noise 2 Noise binning of images
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
-from scipy.signal.windows import hann
+from scipy.signal.windows import triang
 from tqdm import tqdm
 
 from .dataset import N2NMultiPatches, N2NPatches
@@ -43,6 +43,7 @@ class CNNbin:
         block_size=(256, 256),
         batch_size=4,
         input_skip=True,
+        instancenorm=False,
     ):
 
         self.multichannel = multichannel
@@ -58,6 +59,7 @@ class CNNbin:
             depth=depth,
             start_filts=start_filts,
             input_skip=input_skip,
+            instancenorm=instancenorm,
         )
 
         self.criterion = torch.nn.MSELoss()
@@ -65,8 +67,11 @@ class CNNbin:
 
         self.optimizer = torch.optim.Adam(self.model.parameters(), lr=1e-3)
 
+        self.raw_psnr = None
         self.res_psnr = None
+
         self.res_loss = None
+        self.val_loss = None
 
         self.epoch = 0
 
@@ -102,15 +107,16 @@ class CNNbin:
 
         return torch.from_numpy(image.astype("float32")).view(1, *image.shape).cuda()
 
-    def _sgd_step(self, torch_im1, torch_im2, alpha=0.95):
+    def _sgd_step(self, torch_im1, torch_im2, alpha=0.95, train=True):
         # ===================forward=====================
         output1 = self.model(torch_im1)
         estimate = torch_im1 * (1 - alpha) + torch_im2 * alpha
         loss = self.criterion(output1, estimate)
         # ===================backward====================
-        self.optimizer.zero_grad()
-        loss.backward()
-        self.optimizer.step()
+        if train:
+            self.optimizer.zero_grad()
+            loss.backward()
+            self.optimizer.step()
 
         out1 = output1.cpu().detach().numpy()
 
@@ -151,6 +157,8 @@ class CNNbin:
             param_group["lr"] = learning_rate
 
         self.res_loss = []
+        self.val_loss = []
+        self.raw_psnr = []
         self.res_psnr = []
 
         self.model.train()
@@ -168,17 +176,26 @@ class CNNbin:
             self.epoch += 1
 
             out_cnn1, loss1 = self._sgd_step(im1, im2, alpha)
-            out_cnn2, loss2 = self._sgd_step(im2, im1, alpha)
+            out_cnn2, loss2 = self._sgd_step(im2, im1, alpha, train=False)
 
             psnr_cnn, psnr_input = _model_psnr(im1, im2, out_cnn1, out_cnn2, image)
 
             pbar.set_description("PSNR ({:.3}/{:.3})".format(psnr_cnn, psnr_input))
 
-            self.res_loss.append((loss1 + loss2))
+            self.res_loss.append(loss1)
+            self.val_loss.append(loss2)
+
+            self.raw_psnr.append(psnr_input)
             self.res_psnr.append(psnr_cnn)
 
     def train_random(
-        self, image, samples=1, num_epochs=10, learning_rate=1e-3, alpha=0.95
+        self,
+        image,
+        samples=1,
+        num_epochs=10,
+        learning_rate=1e-3,
+        weight_decay=3e-5,
+        alpha=0.95,
     ):
         """Train single image on randomly sampled patches
 
@@ -195,8 +212,11 @@ class CNNbin:
 
         for param_group in self.optimizer.param_groups:
             param_group["lr"] = learning_rate
+            param_group["weight_decay"] = weight_decay
 
         self.res_loss = []
+        self.val_loss = []
+        self.raw_psnr = []
         self.res_psnr = []
 
         self.model.train()
@@ -207,7 +227,8 @@ class CNNbin:
             self.epoch += 1
             psnr_ref = []
             psnr_res = []
-            losses = []
+            losses1 = []
+            losses2 = []
 
             dataset = N2NPatches(
                 image,
@@ -225,11 +246,12 @@ class CNNbin:
                 im1, im2 = sample_batched
 
                 out_cnn1, loss1 = self._sgd_step(im1, im2, alpha)
-                out_cnn2, loss2 = self._sgd_step(im2, im1, alpha)
+                out_cnn2, loss2 = self._sgd_step(im2, im1, alpha, train=False)
 
                 psnr_cnn, psnr_input = _model_psnr(im1, im2, out_cnn1, out_cnn2, image)
-                losses.append(loss1)
-                losses.append(loss2)
+
+                losses1.append(loss1)
+                losses2.append(loss2)
                 psnr_res.append(psnr_cnn)
                 psnr_ref.append(psnr_input)
 
@@ -237,11 +259,19 @@ class CNNbin:
                 "PSNR ({:.3}/{:.3})".format(np.mean(psnr_res), np.mean(psnr_ref))
             )
 
-            self.res_loss.append(np.mean(losses))
+            self.res_loss.append(np.mean(losses1))
+            self.val_loss.append(np.mean(losses2))
+            self.raw_psnr.append(np.mean(psnr_ref))
             self.res_psnr.append(np.mean(psnr_res))
 
     def train_split(
-        self, image, sampling=1.1, num_epochs=10, learning_rate=1e-3, alpha=0.95
+        self,
+        image,
+        sampling=1.1,
+        num_epochs=10,
+        learning_rate=3e-4,
+        weight_decay=3e-5,
+        alpha=0.95,
     ):
         """Train single image on deterministic patches
 
@@ -258,6 +288,7 @@ class CNNbin:
 
         for param_group in self.optimizer.param_groups:
             param_group["lr"] = learning_rate
+            param_group["weight_decay"] = weight_decay
 
         self.res_loss = []
         self.res_psnr = []
@@ -292,16 +323,27 @@ class CNNbin:
             self.res_loss.append(np.mean(losses))
             self.res_psnr.append(np.mean(psnr_res))
 
-    def train_list(self, images, samples=1, num_epochs=10, lr=1e-3, alpha=0.95):
+    def train_list(
+        self,
+        images,
+        samples=1,
+        num_epochs=10,
+        learning_rate=3e-4,
+        weight_decay=3e-5,
+        alpha=0.95,
+    ):
         """ train using a list of images """
 
         for image in images:
             self._assert_image(image, even=False)
 
         for param_group in self.optimizer.param_groups:
-            param_group["lr"] = lr
+            param_group["lr"] = learning_rate
+            param_group["weight_decay"] = weight_decay
 
         self.res_loss = []
+        self.val_loss = []
+        self.raw_psnr = []
         self.res_psnr = []
 
         self.model.train()
@@ -311,13 +353,14 @@ class CNNbin:
             self.epoch += 1
             psnr_ref = []
             psnr_res = []
-            losses = []
+            losses1 = []
+            losses2 = []
 
             dataset = N2NMultiPatches(
                 images,
                 block_shape=self.block_size,
                 sampling=samples,
-                random_seed=self.epoch,
+                random_seed=len(images) * self.epoch,
             )
 
             data_loader = torch.utils.data.DataLoader(
@@ -328,11 +371,11 @@ class CNNbin:
                 im1, im2 = sample_batched
 
                 out_cnn1, loss1 = self._sgd_step(im1, im2, alpha)
-                out_cnn2, loss2 = self._sgd_step(im2, im1, alpha)
+                out_cnn2, loss2 = self._sgd_step(im2, im1, alpha, train=False)
 
                 psnr_cnn, psnr_input = _model_psnr(im1, im2, out_cnn1, out_cnn2)
-                losses.append(loss1)
-                losses.append(loss2)
+                losses1.append(loss1)
+                losses2.append(loss2)
                 psnr_res.append(psnr_cnn)
                 psnr_ref.append(psnr_input)
 
@@ -340,7 +383,9 @@ class CNNbin:
                 "PSNR ({:.3}/{:.3})".format(np.mean(psnr_res), np.mean(psnr_ref))
             )
 
-            self.res_loss.append(np.mean(losses))
+            self.res_loss.append(np.mean(losses1))
+            self.val_loss.append(np.mean(losses2))
+            self.raw_psnr.append(np.mean(psnr_ref))
             self.res_psnr.append(np.mean(psnr_res))
 
     def filter_patch(self, image):
@@ -388,7 +433,7 @@ class CNNbin:
         for index in rangebar(len(patches)):
             patches_filt[index] = self.filter_patch(patches[index])
 
-        return combine(patches_filt, bin_shape, sampling=sampling, windowfunc=hann)
+        return combine(patches_filt, bin_shape, sampling=sampling, windowfunc=triang)
 
     def load(self, filename):
         """ load model weights """
@@ -404,9 +449,13 @@ class CNNbin:
         """ plot training progress """
         plt.figure(figsize=(8, 3))
         plt.subplot(121)
-        plt.plot(self.res_loss)
+        plt.plot(self.res_loss, label="Train")
+        plt.plot(self.val_loss, label="Validation")
+        plt.legend()
         plt.ylabel("L2 Loss")
         plt.subplot(122)
-        plt.plot(self.res_psnr)
+        plt.plot(self.res_psnr, label="Result")
+        plt.plot(self.raw_psnr, label="Data")
+        plt.legend()
         plt.ylabel("PSNR")
         plt.show()

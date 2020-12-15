@@ -126,9 +126,12 @@ def combine(blocklist, shape, sampling=1.0, windowfunc=None):
             for lim1 in limits[1]:
                 slice1 = slice(lim1, lim1 + block_shape[1])
 
-                image[slice0, slice1] += (
-                    blocklist[index] * window_block[:, :, np.newaxis]
-                )
+                if image.ndim == 3:
+                    image[slice0, slice1] += (
+                        blocklist[index] * window_block[:, :, np.newaxis]
+                    )
+                else:
+                    image[slice0, slice1] += blocklist[index] * window_block
 
                 image_n[slice0, slice1] += window_block
                 index += 1

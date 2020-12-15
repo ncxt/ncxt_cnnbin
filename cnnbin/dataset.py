@@ -94,9 +94,9 @@ class N2NMultiPatches(Dataset):
                     im,
                     self.block_shape,
                     max_patches=self.sampling,
-                    random_state=random_seed,
+                    random_state=random_seed + i,
                 )
-                for im in images
+                for i, im in enumerate(images)
             ],
             0,
         )
