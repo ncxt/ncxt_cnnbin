@@ -347,7 +347,9 @@ class CNNbin:
         self.res_psnr = []
 
         self.model.train()
-        pbar = progress_bar(num_epochs, desc="PSNR ({:.3}/{:.3})".format(0.0, 0.0))
+        pbar = tnrange(
+            num_epochs, desc="PSNR ({:.3}/{:.3})".format(0.0, 0.0), leave=False
+        )
 
         for _ in pbar:
             self.epoch += 1
@@ -430,7 +432,7 @@ class CNNbin:
         else:
             patches_filt = np.zeros((patches.shape[0], *bin_block_size))
 
-        for index in rangebar(len(patches)):
+        for index in tnrange(len(patches), leave=False):
             patches_filt[index] = self.filter_patch(patches[index])
 
         return combine(patches_filt, bin_shape, sampling=sampling, windowfunc=triang)
