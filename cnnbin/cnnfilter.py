@@ -5,7 +5,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import torch
 from scipy.signal.windows import triang
-from tqdm import tqdm
+from tqdm.auto import tqdm, trange
 
 from .dataset import N2NMultiPatches, N2NPatches
 from .patches import combine, split
@@ -347,7 +347,7 @@ class CNNbin:
         self.res_psnr = []
 
         self.model.train()
-        pbar = tnrange(
+        pbar = trange(
             num_epochs, desc="PSNR ({:.3}/{:.3})".format(0.0, 0.0), leave=False
         )
 
@@ -419,7 +419,7 @@ class CNNbin:
         """ filter image using the network by splitting it up into smaller pathces """
         self._assert_image(image, even=True)
 
-        bin_block_size = [d // 2 for d in self.block_size]
+        # bin_block_size = [d // 2 for d in self.block_size]
         bin_shape = [d // 2 for d in image.shape]
 
         if self.multichannel:
@@ -427,13 +427,18 @@ class CNNbin:
 
         patches = split(image, self.block_size, sampling=sampling, ind_div=2)
 
-        if self.multichannel:
-            patches_filt = np.zeros((patches.shape[0], *bin_block_size, 3))
-        else:
-            patches_filt = np.zeros((patches.shape[0], *bin_block_size))
+        # if self.multichannel:
+        #     patches_filt = np.zeros(
+        #         (patches.shape[0], *bin_block_size, 3)
+        #     )  # pylint: disable=E1136  # pylint/issues/3139
+        # else:
+        #     patches_filt = np.zeros(
+        #         (patches.shape[0], *bin_block_size)
+        #     )  # pylint: disable=E1136  # pylint/issues/3139
 
-        for index in tnrange(len(patches), leave=False):
-            patches_filt[index] = self.filter_patch(patches[index])
+        # for index in range(len(patches)):
+        # patches_filt[index] = self.filter_patch(patches[index])
+        patches_filt = np.array([self.filter_patch(patch) for patch in patches])
 
         return combine(patches_filt, bin_shape, sampling=sampling, windowfunc=triang)
 
