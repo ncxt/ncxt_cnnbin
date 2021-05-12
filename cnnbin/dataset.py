@@ -4,9 +4,22 @@ derived torch.utils.dataDataset classes for handling training data
 import numpy as np
 import torch
 from torch.utils.data import Dataset
+import random
 
 from .patches import split
 from .utils import random_patches, split_stack, split_stack_rgb
+
+
+def augment_imagepair(image1, image2, multichannel):
+    transpose = (1, 0, 2) if multichannel else (1, 0)
+    for dim in range(2):
+        if random.choice([True, False]):
+            image1 = np.flip(image1, axis=dim)
+            image2 = np.flip(image2, axis=dim)
+    if random.choice([True, False]):
+        image1 = image1.transpose(transpose)
+        image2 = image2.transpose(transpose)
+    return image1, image2
 
 
 class N2NPatches(Dataset):
@@ -20,12 +33,14 @@ class N2NPatches(Dataset):
         sampling=1.05,
         random_seed=1,
         totorch=True,
+        augment=False,
     ):
         self.image = image
         self.block_shape = block_shape
         self.random = random
         self.sampling = sampling
         self.totorch = totorch
+        self.augment = augment
         self.multichannel = False
         if image.ndim == 3:
             self.multichannel = True
@@ -61,6 +76,9 @@ class N2NPatches(Dataset):
         image1 = self.stack1[index]
         image2 = self.stack2[index]
 
+        if self.augment:
+            image1, image2 = augment_imagepair(image1, image2, self.multichannel)
+
         if self.totorch:
             torch_block1 = self.image_to_torch(image1)
             torch_block2 = self.image_to_torch(image2)
@@ -75,11 +93,20 @@ class N2NPatches(Dataset):
 class N2NMultiPatches(Dataset):
     """Noise2Noise Patches from a list of images"""
 
-    def __init__(self, images, block_shape, sampling=1, random_seed=1, totorch=True):
+    def __init__(
+        self,
+        images,
+        block_shape,
+        sampling=1,
+        random_seed=1,
+        totorch=True,
+        augment=False,
+    ):
         self.images = images
         self.block_shape = block_shape
         self.sampling = sampling
         self.totorch = totorch
+        self.augment = augment
         self.multichannel = False
 
         for image in images:
@@ -118,6 +145,9 @@ class N2NMultiPatches(Dataset):
     def __getitem__(self, index):
         image1 = self.stack1[index]
         image2 = self.stack2[index]
+
+        if self.augment:
+            image1, image2 = augment_imagepair(image1, image2, self.multichannel)
 
         if self.totorch:
             torch_block1 = self.image_to_torch(image1)

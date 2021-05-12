@@ -243,4 +243,3 @@ def progress_bar(rangearg, desc):
     if isnotebook():
         return tqdm.tqdm_notebook(range(rangearg), desc=desc)
     return tqdm.tqdm(range(rangearg), ncols=60, desc=desc)
-

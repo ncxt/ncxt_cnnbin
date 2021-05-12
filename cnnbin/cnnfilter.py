@@ -44,12 +44,14 @@ class CNNbin:
         batch_size=4,
         input_skip=True,
         instancenorm=False,
+        augment=True,
     ):
 
         self.multichannel = multichannel
         self.channels = 1
         self.block_size = block_size
         self.batch_size = batch_size
+        self.augment = augment
 
         if self.multichannel:
             self.channels = 3
@@ -139,6 +141,11 @@ class CNNbin:
 
         if self.multichannel:
             assert image.shape[2] == 3, "Colour images should be in format (H,W,C)"
+
+        assert (
+            image.shape[0] >= self.block_size[0]
+            and image.shape[1] >= self.block_size[1]
+        ), f"Image size {image.shape} is smaller than block size {self.block_size}"
 
     def train_image(self, image, num_epochs=10, learning_rate=1e-3, alpha=0.95):
         """Train single image
@@ -236,6 +243,7 @@ class CNNbin:
                 sampling=samples,
                 random=True,
                 random_seed=self.epoch,
+                augment=self.augment,
             )
 
             data_loader = torch.utils.data.DataLoader(
